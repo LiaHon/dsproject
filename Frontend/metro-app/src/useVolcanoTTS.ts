@@ -40,6 +40,10 @@ function detectLang(text: string): 'zh' | 'ja' | 'en' | 'multi' {
   return 'multi';
 }
 
+function hasKana(text: string): boolean {
+  return /[\u3040-\u30ff]/.test(text);
+}
+
 function splitMixedLanguage(text: string): string[] {
   const src = text.trim();
   if (!src) return [];
@@ -51,20 +55,24 @@ function splitMixedLanguage(text: string): string[] {
   const result: string[] = [];
 
   let cur = '';
+  let curHasKana = false;
 
   for (const ch of src) {
     if (hardBreak.test(ch)) {
       cur += ch;
       if (cur.trim()) result.push(cur.trim());
       cur = '';
+      curHasKana = false;
       continue;
     }
 
     cur += ch;
-    // 如果句子足够长，允许在软停顿处切分
-    if (softBreak.test(ch) && cur.trim().length >= 12) {
+    if (hasKana(ch)) curHasKana = true;
+    // 如果句子足够长，允许在软停顿处切分（含假名则尽量不断句）
+    if (softBreak.test(ch) && cur.trim().length >= 12 && !curHasKana) {
       result.push(cur.trim());
       cur = '';
+      curHasKana = false;
       continue;
     }
 
@@ -72,6 +80,7 @@ function splitMixedLanguage(text: string): string[] {
     if (cur.length >= 60) {
       result.push(cur.trim());
       cur = '';
+      curHasKana = false;
       continue;
     }
   }
@@ -166,6 +175,9 @@ export interface VolcanoTTSOptions {
   /** 音色 ID，如 'zh_female_qingxin' */
   voiceType?: string;
 
+  /** 按语言指定音色（可选），用于多语言强制切换 */
+  voiceTypeMap?: Partial<Record<'zh' | 'ja' | 'en', string>>;
+
   /** 编码格式，推荐 'mp3' */
   encoding?: 'mp3' | 'ogg_opus' | 'pcm';
 
@@ -193,7 +205,7 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
 
   const addLog = useCallback((msg: string) => {
     console.log(msg);
-    setDebugLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-20));
+    setDebugLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-200));
   }, []);
 
   // WebSocket 实例
@@ -318,10 +330,11 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
       }
     }
     
-    console.log(`[TTS] Connecting to ${urlObj.toString()} for slot ${slotIndex}`);
-    const ws = new WebSocket(urlObj.toString());
-    ws.binaryType = 'arraybuffer';
+    const normalizedText = cleanText.replace(/^\s*(中文|日本語|日语|英语|English)\s*[:：]\s*/i, '').trim();
+    const finalText = normalizedText || cleanText;
+    const lang = detectLang(finalText);
 
+    let ws: WebSocket | null = null;
     let finished = false;
     let inactivityTimer: number | null = null;
     let watchdogTimer: number | null = null;
@@ -350,102 +363,123 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
       tryPlayNext();
       processSynthQueue();
 
-      if (closeWs && ws.readyState === WebSocket.OPEN) {
+      if (closeWs && ws && ws.readyState === WebSocket.OPEN) {
         try { ws.close(); } catch { /**/ }
       }
     };
 
-    ws.onopen = () => {
-      console.log(`[TTS] WS opened for slot ${slotIndex}, sending text...`);
-      // 发送完整请求（fire-and-forget per sentence）
-      const reqId = `req-${Date.now()}-${slotIndex}`;
-      const lang = detectLang(cleanText);
-      addLog(`[TTS] slot ${slotIndex} lang=${lang} len=${cleanText.length}`);
+    const startSession = (textToSend: string) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.close(); } catch { /**/ }
+      }
 
-      // SeedTTS 对于多语言会进行自动识别。如果我们显式添加 [日语] 可能会被读出来。
-      // 所以我们直接采用普通分段。为了增加识别率，我们在前面加一个不可见的零宽字符或直接发原文本。
-      const payload = encodeTextPayload({
-        app: {
-          appid:   opts.appId || '',
-          token:   opts.token || 'placeholder', 
-          cluster: 'volcano_tts',
-        },
-        user:    { uid: 'metro-user' },
-        request: {
-          reqid: reqId,
-          text: cleanText,
-          text_type: 'plain',
-          operation: 'query',
-        },
-        audio: {
-          voice_type:   opts.voiceType   || 'BV700_streaming',
-          encoding:     opts.encoding    || 'mp3',
-          speed_ratio:  opts.speedRatio  || 1.0,
-          volume_ratio: opts.volumeRatio || 1.0,
-          pitch_ratio:  1.0,
-        },
-      });
-      ws.send(payload);
+      console.log(`[TTS] Connecting to ${urlObj.toString()} for slot ${slotIndex}`);
+      ws = new WebSocket(urlObj.toString());
+      ws.binaryType = 'arraybuffer';
 
-      // 防卡死兜底：服务端异常不回 last chunk 时，强制结束当前 slot
-      watchdogTimer = window.setTimeout(() => {
-        finalizeSlot('watchdog-timeout');
-      }, 12000);
+      ws.onopen = () => {
+        console.log(`[TTS] WS opened for slot ${slotIndex}, sending text...`);
+        // 发送完整请求（fire-and-forget per sentence）
+        const reqId = `req-${Date.now()}-${slotIndex}`;
+        const resolvedVoice =
+          opts.voiceTypeMap?.[lang as 'zh' | 'ja' | 'en'] ||
+          opts.voiceType ||
+          'BV700_streaming';
+
+        const resolvedLanguage =
+          lang === 'ja' ? 'ja' :
+          lang === 'en' ? 'en' :
+          'cn';
+
+        addLog(`[TTS] slot ${slotIndex} lang=${lang} audio.lang=${resolvedLanguage} len=${finalText.length} kana=${hasKana(finalText) ? 'yes' : 'no'}`);
+        addLog(`[TTS] slot ${slotIndex} textPreview=${JSON.stringify(textToSend.slice(0, 120))}`);
+
+        const payload = encodeTextPayload({
+          app: {
+            appid:   opts.appId || '',
+            token:   opts.token || 'placeholder', 
+            cluster: 'volcano_tts',
+          },
+          user:    { uid: 'metro-user' },
+          request: {
+            reqid: reqId,
+            text: textToSend,
+            text_type: 'plain',
+            operation: 'query',
+          },
+          audio: {
+            voice_type:   resolvedVoice,
+            encoding:     opts.encoding    || 'mp3',
+            speed_ratio:  opts.speedRatio  || 1.0,
+            volume_ratio: opts.volumeRatio || 1.0,
+            pitch_ratio:  1.0,
+            language:     resolvedLanguage,
+          },
+        });
+        ws?.send(payload);
+
+        // 防卡死兜底：服务端异常不回 last chunk 时，强制结束当前 slot
+        watchdogTimer = window.setTimeout(() => {
+          finalizeSlot('watchdog-timeout');
+        }, 12000);
+      };
+
+      ws.onmessage = (ev) => {
+        if (!(ev.data instanceof ArrayBuffer)) return;
+        const { audio, isLast, jsonStr, msgTypeHex } = parseServerMessage(ev.data);
+        const slot = audioQueueRef.current.find(s => s.index === slotIndex);
+        
+        if (jsonStr) {
+          addLog(`[TTS] Server JSON Msg: ${jsonStr}`);
+        } else if (msgTypeHex) {
+          addLog(`[TTS] Received chunk (Type: ${msgTypeHex}), BufferSize: ${audio ? audio.byteLength : 0}`);
+        }
+
+        if (!slot) return;
+
+        if (audio && audio.byteLength > 0) {
+          slot.chunks.push(audio);
+
+          if (inactivityTimer) window.clearTimeout(inactivityTimer);
+          // 一段时间未收到新分片，视为服务端未发 last 标记，强制切下一段
+          inactivityTimer = window.setTimeout(() => {
+            finalizeSlot('audio-inactivity-timeout');
+          }, 1200);
+        }
+
+        // 错误/控制消息：避免一直占住“播放中”
+        if (jsonStr && (msgTypeHex === '0xf' || msgTypeHex === '0xc')) {
+          finalizeSlot('server-error-or-control');
+          return;
+        }
+
+        if (isLast) {
+          addLog(`[TTS] Session finished for slot ${slotIndex}`);
+          finalizeSlot('isLast');
+        }
+      };
+
+      ws.onerror = (e) => {
+        addLog(`[TTS] WS Error on slot ${slotIndex}`);
+        console.warn('[TTS] WS error on slot', slotIndex, e);
+        if (urlObj.hostname !== 'localhost' && urlObj.hostname !== '127.0.0.1') {
+          addLog(`提示：由于浏览器不支持传递 Authorization Header，通常纯前端直连 wss://openspeech.bytedance.com 会报 403/401 握手失败。如果你没有在后台针对该 AppID 开启 URL Param Auth，请使用 ws://localhost:8765 本地代理。`);
+        }
+        const slot = audioQueueRef.current.find(s => s.index === slotIndex);
+        if (slot) slot.done = true; // 跳过这句
+        finalizeSlot('ws-error', false);
+      };
+
+      ws.onclose = () => {
+        addLog(`[TTS] WS Connection closed for slot ${slotIndex}`);
+        finalizeSlot('ws-close', false);
+      };
+
+      // 保存 ws 引用以便 stop() 可关闭
+      wsRef.current = ws;
     };
 
-    ws.onmessage = (ev) => {
-      if (!(ev.data instanceof ArrayBuffer)) return;
-      const { audio, isLast, jsonStr, msgTypeHex } = parseServerMessage(ev.data);
-      const slot = audioQueueRef.current.find(s => s.index === slotIndex);
-      
-      if (jsonStr) {
-        addLog(`[TTS] Server JSON Msg: ${jsonStr}`);
-      } else if (msgTypeHex) {
-        addLog(`[TTS] Received chunk (Type: ${msgTypeHex}), BufferSize: ${audio ? audio.byteLength : 0}`);
-      }
-
-      if (!slot) return;
-
-      if (audio && audio.byteLength > 0) {
-        slot.chunks.push(audio);
-
-        if (inactivityTimer) window.clearTimeout(inactivityTimer);
-        // 一段时间未收到新分片，视为服务端未发 last 标记，强制切下一段
-        inactivityTimer = window.setTimeout(() => {
-          finalizeSlot('audio-inactivity-timeout');
-        }, 1200);
-      }
-
-      // 错误/控制消息：避免一直占住“播放中”
-      if (jsonStr && (msgTypeHex === '0xf' || msgTypeHex === '0xc')) {
-        finalizeSlot('server-error-or-control');
-        return;
-      }
-
-      if (isLast) {
-        addLog(`[TTS] Session finished for slot ${slotIndex}`);
-        finalizeSlot('isLast');
-      }
-    };
-
-    ws.onerror = (e) => {
-      addLog(`[TTS] WS Error on slot ${slotIndex}`);
-      console.warn('[TTS] WS error on slot', slotIndex, e);
-      if (urlObj.hostname !== 'localhost' && urlObj.hostname !== '127.0.0.1') {
-        addLog(`提示：由于浏览器不支持传递 Authorization Header，通常纯前端直连 wss://openspeech.bytedance.com 会报 403/401 握手失败。如果你没有在后台针对该 AppID 开启 URL Param Auth，请使用 ws://localhost:8765 本地代理。`);
-      }
-      const slot = audioQueueRef.current.find(s => s.index === slotIndex);
-      if (slot) slot.done = true; // 跳过这句
-      finalizeSlot('ws-error', false);
-    };
-
-    ws.onclose = () => {
-      addLog(`[TTS] WS Connection closed for slot ${slotIndex}`);
-      finalizeSlot('ws-close', false);
-    };
-
-    // 保存 ws 引用以便 stop() 可关闭
-    wsRef.current = ws;
+    startSession(finalText);
   }, [opts, tryPlayNext, addLog]);
 
   const processSynthQueue = useCallback(() => {

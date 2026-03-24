@@ -100,6 +100,9 @@ export default function App() {
   const [ttsToken,      setTtsToken]      = useState(() => localStorage.getItem('metro-tts-token') || '');
   const [ttsWsUrl,      setTtsWsUrl]      = useState(() => localStorage.getItem('metro-tts-ws')    || 'ws://localhost:8765');
   const [ttsVoice,      setTtsVoice]      = useState(() => localStorage.getItem('metro-tts-voice') || 'BV700_streaming');
+  const [ttsVoiceZh,    setTtsVoiceZh]    = useState(() => localStorage.getItem('metro-tts-voice-zh') || '');
+  const [ttsVoiceJa,    setTtsVoiceJa]    = useState(() => localStorage.getItem('metro-tts-voice-ja') || '');
+  const [ttsVoiceEn,    setTtsVoiceEn]    = useState(() => localStorage.getItem('metro-tts-voice-en') || '');
   const [ttsSpeed,      setTtsSpeed]      = useState(() => parseFloat(localStorage.getItem('metro-tts-speed') || '1.0'));
   const [triggerMode,   setTriggerMode]   = useState<TriggerMode>(
     () => (localStorage.getItem('metro-tts-trigger') as TriggerMode) || 'both'
@@ -115,6 +118,9 @@ export default function App() {
   useEffect(() => { localStorage.setItem('metro-tts-token',    ttsToken); },           [ttsToken]);
   useEffect(() => { localStorage.setItem('metro-tts-ws',       ttsWsUrl); },           [ttsWsUrl]);
   useEffect(() => { localStorage.setItem('metro-tts-voice',    ttsVoice); },           [ttsVoice]);
+  useEffect(() => { localStorage.setItem('metro-tts-voice-zh', ttsVoiceZh); },         [ttsVoiceZh]);
+  useEffect(() => { localStorage.setItem('metro-tts-voice-ja', ttsVoiceJa); },         [ttsVoiceJa]);
+  useEffect(() => { localStorage.setItem('metro-tts-voice-en', ttsVoiceEn); },         [ttsVoiceEn]);
 
   // 兼容迁移：历史版本可能保存了不稳定的直连地址，这里自动切回本地代理
   useEffect(() => {
@@ -164,6 +170,11 @@ export default function App() {
     appId:      ttsAppId,
     token:      ttsToken,
     voiceType:  ttsVoice,
+    voiceTypeMap: {
+      zh: ttsVoiceZh || ttsVoice,
+      ja: ttsVoiceJa || ttsVoice,
+      en: ttsVoiceEn || ttsVoice,
+    },
     speedRatio: ttsSpeed,
     enabled:    ttsEnabled,
     triggerMode,
@@ -678,6 +689,33 @@ export default function App() {
                     </div>
 
                     <div className="form-group mt-4">
+                      <label>{t('按语言指定音色（可选）', 'Per-language voice override (optional)')}</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+                        <input
+                          type="text"
+                          value={ttsVoiceZh}
+                          onChange={e => setTtsVoiceZh(e.target.value)}
+                          placeholder={t('中文音色 ID（留空=默认）', 'Chinese voice ID (empty = default)')}
+                        />
+                        <input
+                          type="text"
+                          value={ttsVoiceJa}
+                          onChange={e => setTtsVoiceJa(e.target.value)}
+                          placeholder={t('日文音色 ID（建议填写日语专用音色）', 'Japanese voice ID (recommended to set a JP voice)')}
+                        />
+                        <input
+                          type="text"
+                          value={ttsVoiceEn}
+                          onChange={e => setTtsVoiceEn(e.target.value)}
+                          placeholder={t('英文音色 ID（留空=默认）', 'English voice ID (empty = default)')}
+                        />
+                      </div>
+                      <div className="settings-hint">
+                        {t('如果日语仍只读汉字，请填写一个支持日语的音色 ID。', 'If Japanese still reads only kanji, set a JP-capable voice ID here.')}
+                      </div>
+                    </div>
+
+                    <div className="form-group mt-4">
                       <label style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span>{t('语速', 'Speed')}</span>
                         <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{ttsSpeed.toFixed(1)}×</span>
@@ -693,25 +731,26 @@ export default function App() {
                     <div className="form-group mt-4" style={{ borderTop: '1px solid #333', paddingTop: '15px' }}>
                       <label>{t('TTS 诊断面板', 'TTS Debugger')}</label>
                       <button className="btn-secondary" onClick={() => {
-                        tts.speakFull('你好，能听到我的声音吗？我是一段测试语音！当然可以！以下是“角楼”这一故宫小景点的三语表达：\n' +
+                        tts.speakFull('你好，能听到我的声音吗？我是一段测试语音！' +
                           '\n' +
-                          '中文：故宫的四个城角，各有一座玲珑挺拔的角楼。\n' +
+                          '中文：故宫的四个城角，各有一座玲珑挺拔的角楼。' +
                           '日本語：故宮の四つの隅には、それぞれ精巧で高くそびえる角楼があります。\n' +
                           'English: There is a delicate and towering corner tower at each of the four corners of the Forbidden City.');
                       }}>
                         发测试语音 (多语言)
                       </button>
-                      <div className="debug-box" style={{ marginTop: '10px', background: '#1e1e1e', padding: '10px', borderRadius: '6px', fontSize: '12px', color: '#00ffcc', maxHeight: '150px', overflowY: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                      <div className="debug-box" style={{ marginTop: '10px', background: '#1e1e1e', padding: '10px', borderRadius: '6px', fontSize: '12px', color: '#00ffcc', maxHeight: '320px', overflowY: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
                         {tts.debugLogs.length === 0 ? '目前无连接...\n点击上方[发测试语音]以发起连接' : tts.debugLogs.join('\n')}
                       </div>
                     </div>
 
-                    <div className="tts-info-card mt-4">
+                    {/*<div className="tts-info-card mt-4">
                       <div className="tts-info-title">⚡ 工作原理</div>
                       <div className="tts-info-body">
                         LLM 流式输出 → 按标点断句 → 每句建立独立 WebSocket 连接推送到火山 TTS → 接收 MP3 分片 → AudioContext 解码按序队列播放。多句并发请求，有序播放保证连贯。
                       </div>
                     </div>
+                    */}
                   </div>
                 )}
 

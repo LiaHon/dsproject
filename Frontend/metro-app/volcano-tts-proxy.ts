@@ -73,6 +73,16 @@ function injectAuth(rawFrame: Buffer, appId: string, token: string, cluster: str
     return rawFrame; // 无法解析则透传
   }
 
+  try {
+    const req = parsed.request as Record<string, unknown> | undefined;
+    const text = typeof req?.text === 'string' ? req.text : '';
+    const hasKana = /[\u3040-\u30ff]/.test(text);
+    const preview = text.slice(0, 120).replace(/\n/g, '\\n');
+    console.log(`[Proxy] Incoming text len=${text.length} kana=${hasKana ? 'yes' : 'no'} preview="${preview}"`);
+  } catch {
+    // ignore logging errors
+  }
+
   // 注入 / 覆盖鉴权字段
   const app = (parsed.app as Record<string, unknown>) || {};
   app.appid   = appId;
