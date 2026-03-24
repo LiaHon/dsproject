@@ -56,6 +56,7 @@ function splitMixedLanguage(text: string): string[] {
 
   let cur = '';
   let curHasKana = false;
+  let lastSpaceIdx = -1;
 
   for (const ch of src) {
     if (hardBreak.test(ch)) {
@@ -67,6 +68,7 @@ function splitMixedLanguage(text: string): string[] {
     }
 
     cur += ch;
+    if (ch === ' ') lastSpaceIdx = cur.length - 1;
     if (hasKana(ch)) curHasKana = true;
     // 如果句子足够长，允许在软停顿处切分（含假名则尽量不断句）
     if (softBreak.test(ch) && cur.trim().length >= 12 && !curHasKana) {
@@ -78,9 +80,17 @@ function splitMixedLanguage(text: string): string[] {
 
     // 防止单段过长（超过 60 字符强制切，尽量找个空格或词间）
     if (cur.length >= 60) {
-      result.push(cur.trim());
-      cur = '';
+      if (lastSpaceIdx > 10 && /[A-Za-z]/.test(cur)) {
+        const left = cur.slice(0, lastSpaceIdx).trim();
+        const right = cur.slice(lastSpaceIdx + 1).trim();
+        if (left) result.push(left);
+        cur = right;
+      } else {
+        result.push(cur.trim());
+        cur = '';
+      }
       curHasKana = false;
+      lastSpaceIdx = -1;
       continue;
     }
   }
@@ -525,10 +535,17 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
       sentences.push(match[0]);
     }
 
-    // 强制切分超长缓冲
+    // 强制切分超长缓冲（尽量避免英文断词）
     if (sentences.length === 0 && textBufferRef.current.length > MAX_BUFFER_LEN) {
-      sentences.push(textBufferRef.current);
-      textBufferRef.current = '';
+      const buf = textBufferRef.current;
+      const lastSpace = buf.lastIndexOf(' ');
+      if (lastSpace > 10 && /[A-Za-z]/.test(buf)) {
+        sentences.push(buf.slice(0, lastSpace));
+        textBufferRef.current = buf.slice(lastSpace + 1);
+      } else {
+        sentences.push(buf);
+        textBufferRef.current = '';
+      }
     } else if (sentences.length > 0) {
       const last = sentences[sentences.length - 1];
       const lastEnd = textBufferRef.current.lastIndexOf(last) + last.length;
