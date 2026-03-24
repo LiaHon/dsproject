@@ -693,9 +693,13 @@ export default function App() {
                     <div className="form-group mt-4" style={{ borderTop: '1px solid #333', paddingTop: '15px' }}>
                       <label>{t('TTS 诊断面板', 'TTS Debugger')}</label>
                       <button className="btn-secondary" onClick={() => {
-                        tts.speakFull('你好，能听到我的声音吗？我是一段测试语音！');
+                        tts.speakFull('你好，能听到我的声音吗？我是一段测试语音！当然可以！以下是“角楼”这一故宫小景点的三语表达：\n' +
+                          '\n' +
+                          '中文：故宫的四个城角，各有一座玲珑挺拔的角楼。\n' +
+                          '日本語：故宮の四つの隅には、それぞれ精巧で高くそびえる角楼があります。\n' +
+                          'English: There is a delicate and towering corner tower at each of the four corners of the Forbidden City.');
                       }}>
-                        发测试语音
+                        发测试语音 (多语言)
                       </button>
                       <div className="debug-box" style={{ marginTop: '10px', background: '#1e1e1e', padding: '10px', borderRadius: '6px', fontSize: '12px', color: '#00ffcc', maxHeight: '150px', overflowY: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
                         {tts.debugLogs.length === 0 ? '目前无连接...\n点击上方[发测试语音]以发起连接' : tts.debugLogs.join('\n')}
