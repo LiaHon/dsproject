@@ -36,7 +36,7 @@ npx tsx volcano-tts-proxy.ts
 前端可在“通用设置”中填写 **路线规划 API 地址**，以 POST JSON 获取路线并渲染到右侧列表。
 接口标准见：
 
-- [Frontend/metro-app/docs/route-api.md](Frontend/metro-app/docs/route-api.md)
+- [Frontend/metro-app/docs/route-api.md](./Frontend/metro-app/docs/route-api.md)
 
 ## 设置说明
 
