@@ -10,8 +10,16 @@ import { useVolcanoTTS } from './useVolcanoTTS';
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface Station { name: string; x: number; y: number; }
 interface RouteType {
-  color1: string; color2: string; label1: string; label2: string;
-  stations: Station[]; switchAt: number; duration: number; badge?: string; desc: string;
+  color1?: string; color2?: string; label1?: string; label2?: string;
+  stations?: Station[]; switchAt?: number; duration: number; badge?: string; desc: string;
+  title?: string; origin?: string; destination?: string; routeId?: string;
+}
+interface RouteApiResponse {
+  requestId: string;
+  origin?: string;
+  destination?: string;
+  routes: RouteType[];
+  generatedAt?: string;
 }
 interface Message { id: number; role: 'ai' | 'user'; content: string; }
 interface ChatSession { id: string; title: string; timestamp: number; messages: Message[]; }
@@ -104,6 +112,10 @@ export default function App() {
   const [ttsVoiceJa,    setTtsVoiceJa]    = useState(() => localStorage.getItem('metro-tts-voice-ja') || '');
   const [ttsVoiceEn,    setTtsVoiceEn]    = useState(() => localStorage.getItem('metro-tts-voice-en') || '');
   const [ttsSpeed,      setTtsSpeed]      = useState(() => parseFloat(localStorage.getItem('metro-tts-speed') || '1.0'));
+  const [routeApiEndpoint, setRouteApiEndpoint] = useState(() => localStorage.getItem('metro-route-api') || '');
+  const [apiRoutes, setApiRoutes] = useState<RouteType[]>([]);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [triggerMode,   setTriggerMode]   = useState<TriggerMode>(
     () => (localStorage.getItem('metro-tts-trigger') as TriggerMode) || 'both'
   );
@@ -130,6 +142,7 @@ export default function App() {
     }
   }, []);
   useEffect(() => { localStorage.setItem('metro-tts-speed',    String(ttsSpeed)); },   [ttsSpeed]);
+  useEffect(() => { localStorage.setItem('metro-route-api',    routeApiEndpoint); },  [routeApiEndpoint]);
   useEffect(() => { localStorage.setItem('metro-tts-trigger',  triggerMode); },        [triggerMode]);
 
   const t = (zh: string, en: string) => appLanguage === 'zh' ? zh : en;
@@ -184,6 +197,49 @@ export default function App() {
     ? (sessions.find(s => s.id === currentSessionId)?.messages ?? [])
     : [];
 
+  const loadRoutes = useCallback(async (payload?: { query?: string; origin?: string; destination?: string }) => {
+    if (!routeApiEndpoint) return;
+    setRouteLoading(true);
+    setRouteError(null);
+    try {
+      const res = await fetch(routeApiEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: payload?.query,
+          origin: payload?.origin,
+          destination: payload?.destination,
+          language: appLanguage,
+          client: 'metro-app',
+          version: 'v1'
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as RouteApiResponse;
+      const normalized = (data.routes || []).map(r => ({
+        ...r,
+        color1: r.color1 || '#4f46e5',
+        color2: r.color2 || '#22c55e',
+        label1: r.label1 || '',
+        label2: r.label2 || '',
+        stations: r.stations || [],
+        desc: r.desc || '推荐路线',
+      }));
+      setApiRoutes(normalized);
+    } catch (e) {
+      setRouteError(e instanceof Error ? e.message : 'route api error');
+      setApiRoutes([]);
+    } finally {
+      setRouteLoading(false);
+    }
+  }, [routeApiEndpoint, appLanguage]);
+
+  useEffect(() => {
+    if (routeApiEndpoint) {
+      loadRoutes();
+    }
+  }, [routeApiEndpoint, loadRoutes]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -209,6 +265,9 @@ export default function App() {
 
     const query = inputVal;
     setInputVal('');
+    if (routeApiEndpoint) {
+      loadRoutes({ query });
+    }
     setIsTyping(true);
     streamingTextRef.current = '';
     setStreamingText('');
@@ -499,17 +558,25 @@ export default function App() {
       <div id="sidebar" className={sidebarOpen ? 'open' : ''}>
         <div className="panel-label">推荐路线</div>
         <div id="route-panel">
-          {routesData.map((route, idx) => (
+          {(apiRoutes.length > 0 ? apiRoutes : routesData).map((route, idx) => (
             <div key={idx} className={`route-card ${selectedRoute === idx ? 'selected' : ''}`} onClick={() => setSelectedRoute(idx)}>
-              <div className="line-dot" style={{ background: route.color1 }} />
+              <div className="line-dot" style={{ background: route.color1 || '#4f46e5' }} />
               <div className="route-info-text">
-                <div className="route-name">大兴机场 → 国贸</div>
+                <div className="route-name">
+                  {route.title || (route.origin && route.destination ? `${route.origin} → ${route.destination}` : '推荐路线')}
+                </div>
                 <div className="route-sub">{route.desc}</div>
               </div>
               <div className="route-duration">{route.duration} 分</div>
             </div>
           ))}
         </div>
+        {routeLoading && (
+          <div style={{ fontSize: 12, color: '#8ea0b5', padding: '6px 2px' }}>正在获取路线...</div>
+        )}
+        {routeError && (
+          <div style={{ fontSize: 12, color: '#f87171', padding: '6px 2px' }}>路线接口错误：{routeError}</div>
+        )}
         <div className="panel-label">线路地图</div>
         <div id="map-panel">
           {mapboxToken
@@ -758,6 +825,14 @@ export default function App() {
                 {settingsTab === 'general' && (
                   <div className="settings-panel">
                     <h3>{t('通用设置', 'General')}</h3>
+                    <div className="form-group">
+                      <label>{t('路线规划 API 地址', 'Route API Endpoint')}</label>
+                      <input type="text" value={routeApiEndpoint} onChange={e => setRouteApiEndpoint(e.target.value)}
+                        placeholder="https://api.example.com/metro/routes" />
+                      <div className="settings-hint">
+                        {t('用于右侧路线列表的数据来源（POST JSON）。留空则使用内置示例数据。', 'Data source for the right route list (POST JSON). Leave empty to use built-in demo data.')}
+                      </div>
+                    </div>
                     <div className="form-group">
                       <label>{t('界面语言', 'Language')}</label>
                       <select value={appLanguage} onChange={e => setAppLanguage(e.target.value as 'zh' | 'en')}>
