@@ -477,7 +477,7 @@
 "line_affinity": ["8号线"]
 },
 {
-"station_name": "万平口",
+"station_name": "宛平城",
 "tree_path": ["红色记忆", "革命地标"],
 "culture_tags": ["宛平城", "卢沟桥", "抗战精神", "历史见证"],
 "culture_types": ["红色记忆", "古迹遗址"],
@@ -547,7 +547,7 @@
 "line_affinity": ["7号线", "八通线"]
 },
 {
-"station_name": "亮马河",
+"station_name": "亮马桥",
 "tree_path": ["生态闲情", "城中水系"],
 "culture_tags": ["滨水夜游", "国际社区", "悠闲生活", "北京塞纳河"],
 "culture_types": ["生态闲情", "潮流艺创"],
@@ -615,20 +615,6 @@
 "confidence": 0.85,
 "why_recommend": "体验最年轻、最国际化、最具脑洞的校园周边文化。",
 "line_affinity": ["13号线"]
-},
-{
-"station_name": "首钢园",
-"tree_path": ["现代地标", "工业遗存"],
-"culture_tags": ["冬奥滑雪大跳台", "工业朋克", "城市更新", "三高炉"],
-"culture_types": ["现代地标", "潮流艺创"],
-"story_summary": "百年钢厂变身冬奥奇迹。这里的工业铁塔与动感的滑雪大跳台完美融合，是工业文化重生的典范。",
-"recommended_topics": ["工业遗址改造案例", "冬奥建筑美学"],
-"nearby_pois": ["首钢滑雪大跳台", "三高炉博物馆"],
-"audience_fit": ["摄影师", "工业风爱好者", "户外运动迷"],
-"popularity": 0.94,
-"confidence": 0.96,
-"why_recommend": "极具冲击力的工业朋克视觉圣地与冬奥英雄地。",
-"line_affinity": ["11号线"]
 },
 {
 "station_name": "模式口",
@@ -799,20 +785,6 @@
 "line_affinity": ["6号线", "10号线"]
 },
 {
-"station_name": "隆福寺",
-"tree_path": ["潮流艺创", "文化更新"],
-"culture_tags": ["文化园区", "隆福大厦", "屋顶庭院", "古今交融"],
-"culture_types": ["潮流艺创", "老城脉络"],
-"story_summary": "昔日的文化中心通过城市更新华丽转型。如今屋顶有着最美的故宫角楼远眺视野，是京城潮流打卡地。",
-"recommended_topics": ["城市旧城改造", "北京夜生活新地标"],
-"nearby_pois": ["隆福大厦", "木木美术馆"],
-"audience_fit": ["文艺青年", "建筑师", "潮流买家"],
-"popularity": 0.88,
-"confidence": 0.94,
-"why_recommend": "老城更新的极佳案例，在屋顶俯瞰故宫红墙。",
-"line_affinity": ["5号线", "6号线"]
-},
-{
 "station_name": "东四",
 "tree_path": ["老城脉络", "胡同民居"],
 "culture_tags": ["东四条头", "大宅门", "胡同深处", "贵胃气息"],
@@ -841,7 +813,7 @@
 "line_affinity": ["13号线"]
 },
 {
-"station_name": "东五环外(常营)",
+"station_name": "常营",
 "tree_path": ["美食市井", "传统文化"],
 "culture_tags": ["回民聚居区", "清真寺", "常营美食", "郊区生活"],
 "culture_types": ["美食市井", "老城脉络"],
@@ -995,20 +967,6 @@
 "line_affinity": ["2号线"]
 },
 {
-"station_name": "国家大剧院(天安门西)",
-"tree_path": ["潮流艺创", "演艺殿堂"],
-"culture_tags": ["水滴建筑", "顶级演出", "艺术普及", "现代地标"],
-"culture_types": ["潮流艺创", "现代艺术"],
-"story_summary": "北京最震撼的现代建筑之一。犹如从水中升起的珍珠，不仅是世界级的演出场所，更是现代设计的典范。",
-"recommended_topics": ["剧场声学与美学", "中西方高雅艺术交流"],
-"nearby_pois": ["国家大剧院", "人民大会堂"],
-"audience_fit": ["古典乐迷", "歌剧爱好者", "摄影博主"],
-"popularity": 0.95,
-"confidence": 0.94,
-"why_recommend": "在皇城核心区领略世界顶级演艺艺术的魅力。",
-"line_affinity": ["1号线"]
-},
-{
 "station_name": "双井",
 "tree_path": ["潮流艺创", "国际生活"],
 "culture_tags": ["时尚社区", "都市活力", "多元美食", "购物中心"],
@@ -1091,20 +1049,6 @@
 "confidence": 0.9,
 "why_recommend": "拍摄具有未来感的视觉大片，感受新金融城的脉搏。",
 "line_affinity": ["14号线", "16号线"]
-},
-{
-"station_name": "龙潭公园(潘家园/十里河)",
-"tree_path": ["生态闲情", "城中水系"],
-"culture_tags": ["龙文化", "园林水景", "非遗博物馆", "亲子游"],
-"culture_types": ["生态闲情", "传统文化"],
-"story_summary": "以“龙”文化为主题的大型公园。湖光山色间，这里的体育活动和非遗展览丰富多彩，是东南部居民的乐园。",
-"recommended_topics": ["中国龙图腾文化", "城市公园的运动功能"],
-"nearby_pois": ["龙潭湖公园", "北京游乐园旧址"],
-"audience_fit": ["运动达人", "亲子游客"],
-"popularity": 0.8,
-"confidence": 0.88,
-"why_recommend": "在充满“龙”韵的湖畔享受北京东南部的自然与生活。",
-"line_affinity": ["10号线", "14号线"]
 },
 {
 "station_name": "北京南站",
@@ -1233,7 +1177,7 @@
 "line_affinity": ["10号线", "13号线"]
 },
 {
-"station_name": "首钢",
+"station_name": "新首钢",
 "tree_path": ["现代地标", "工业遗存"],
 "culture_tags": ["钢铁文化", "朋克设计", "冬奥组委", "科幻展厅"],
 "culture_types": ["现代地标", "潮流艺创"],
