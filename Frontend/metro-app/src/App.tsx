@@ -9,6 +9,8 @@ import remarkGfm from 'remark-gfm';
 import Map, { NavigationControl, Source, Layer, Popup } from 'react-map-gl/mapbox-legacy';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import './App.css';
+import undoIcon from './assets/undo.svg';
+import redoIcon from './assets/redo.svg';
 import { useVolcanoTTS } from './useVolcanoTTS';
 import {
   displayLineName,
@@ -109,6 +111,34 @@ interface CultureSimilarApiResponse {
 }
 
 type LocationCoordinateMode = 'auto' | 'wgs84-direct' | 'gcj02-to-wgs84';
+type ViewMode = 'chat' | 'explore';
+
+interface StationPopupState {
+  longitude: number;
+  latitude: number;
+  stationName: string;
+  lines: string[];
+  status: string;
+  adjacentStations?: Array<{ lineName: string; directionalNext: Array<{ toward: string; next: string }> }>;
+}
+
+interface ConversationSnapshot {
+  sessions: ChatSession[];
+  currentSessionId: string | null;
+  hasStarted: boolean;
+  apiRoutes: RouteType[];
+  selectedRoute: number;
+  sidebarOpen: boolean;
+  mapExpanded: boolean;
+  viewMode: ViewMode;
+}
+
+function cloneValue<T>(value: T): T {
+  if (typeof globalThis.structuredClone === 'function') {
+    return globalThis.structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 function buildTreeLevelOptions(tree: CultureTreeNode[], path: string[]): CultureTreeNode[][] {
   const levels: CultureTreeNode[][] = [];
@@ -123,29 +153,6 @@ function buildTreeLevelOptions(tree: CultureTreeNode[], path: string[]): Culture
   return levels;
 }
 
-// ─── Static data ────────────────────────────────────────────────────────────
-const routesData: RouteType[] = [
-  {
-    color1: '#D85A30', color2: '#185FA5', label1: '大兴机场线',
-    duration: 52, switchAt: 2,
-    stations: [
-      { name: '大兴机场', x: 0.10, y: 0.85 }, { name: '大兴机场北', x: 0.23, y: 0.72 },
-      { name: '草桥',    x: 0.39, y: 0.57 }, { name: '劲松',     x: 0.56, y: 0.40 },
-      { name: '双井',    x: 0.68, y: 0.32 }, { name: '国贸',     x: 0.82, y: 0.22 },
-    ],
-  },
-  {
-    color1: '#D85A30', color2: '#3B6D11', label1: '大兴机场线',
-    duration: 58, switchAt: 2,
-    stations: [
-      { name: '大兴机场', x: 0.10, y: 0.85 }, { name: '大兴机场北', x: 0.23, y: 0.72 },
-      { name: '草桥',    x: 0.39, y: 0.57 }, { name: '大兴新城',  x: 0.52, y: 0.46 },
-      { name: '亦庄桥',  x: 0.65, y: 0.36 }, { name: '国贸',     x: 0.82, y: 0.22 },
-    ],
-  },
-];
-
-/** 与 BJsubway `g.color` 对齐；键为 `line_name` 去掉括号区间后的主名，或与线 GeoJSON 中 `line_name` 一致 */
 const METRO_LINE_COLORS: Record<string, string> = {
   地铁1号线八通线: '#C23A30',
   地铁2号线内环: '#006098',
@@ -262,6 +269,27 @@ const defaultSessions: ChatSession[] = [
     messages: [
       { id: 1, role: 'user', content: '早上哪条线人少？' },
       { id: 2, role: 'ai',   content: '早高峰各线客流均较大，建议错峰出行，避开 **10号线**、**4号线** 等热门线路。' },
+    ],
+  },
+];
+
+const routesData: RouteType[] = [
+  {
+    color1: '#D85A30', color2: '#185FA5', label1: '大兴机场线',
+    duration: 52, switchAt: 2,
+    stations: [
+      { name: '大兴机场', x: 0.10, y: 0.85 }, { name: '大兴机场北', x: 0.23, y: 0.72 },
+      { name: '草桥',    x: 0.39, y: 0.57 }, { name: '劲松',     x: 0.56, y: 0.40 },
+      { name: '双井',    x: 0.68, y: 0.32 }, { name: '国贸',     x: 0.82, y: 0.22 },
+    ],
+  },
+  {
+    color1: '#D85A30', color2: '#3B6D11', label1: '大兴机场线',
+    duration: 58, switchAt: 2,
+    stations: [
+      { name: '大兴机场', x: 0.10, y: 0.85 }, { name: '大兴机场北', x: 0.23, y: 0.72 },
+      { name: '草桥',    x: 0.39, y: 0.57 }, { name: '大兴新城',  x: 0.52, y: 0.46 },
+      { name: '亦庄桥',  x: 0.65, y: 0.36 }, { name: '国贸',     x: 0.82, y: 0.22 },
     ],
   },
 ];
@@ -410,6 +438,65 @@ function getNearestPathVertexIndex(paths: [number, number][][], coord: [number, 
     offset += path.length;
   }
   return bestIndex === Infinity ? null : bestIndex;
+}
+
+function normalizeStationNameToken(raw: string | undefined | null): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/\s+/g, '').replace(/站$/, '').trim();
+}
+
+function findBestStationNameIndex(names: string[], target: string | undefined | null): number {
+  const needle = normalizeStationNameToken(target);
+  if (!needle) return -1;
+  let bestIndex = -1;
+  let bestScore = -1;
+  for (let i = 0; i < names.length; i += 1) {
+    const current = normalizeStationNameToken(names[i]);
+    if (!current) continue;
+    let score = -1;
+    if (current === needle) score = 3;
+    else if (current.includes(needle) || needle.includes(current)) score = 2;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+      if (score === 3) break;
+    }
+  }
+  return bestIndex;
+}
+
+function orientStationsByDirection(
+  orderedNames: string[],
+  frontName: string,
+  terminalName: string
+): string[] {
+  if (orderedNames.length <= 1) return orderedNames;
+  const frontIdx = findBestStationNameIndex(orderedNames, frontName);
+  const terminalIdx = findBestStationNameIndex(orderedNames, terminalName);
+  if (frontIdx >= 0 && terminalIdx >= 0 && frontIdx > terminalIdx) {
+    return [...orderedNames].reverse();
+  }
+  return orderedNames;
+}
+
+function mergeDirectionalNextRecords(
+  current: Array<{ toward: string; next: string }>,
+  incoming: Array<{ toward: string; next: string }>
+): Array<{ toward: string; next: string }> {
+  const merged = [...current];
+  for (const item of incoming) {
+    const token = normalizeStationNameToken(item.toward);
+    if (!token) continue;
+    const hitIndex = merged.findIndex((m) => normalizeStationNameToken(m.toward) === token);
+    if (hitIndex < 0) {
+      merged.push(item);
+      continue;
+    }
+    if (!merged[hitIndex].next && item.next) {
+      merged[hitIndex] = item;
+    }
+  }
+  return merged;
 }
 
 function buildPolylineBetweenPoints(
@@ -819,7 +906,6 @@ export default function App() {
     };
   }, [pointGeojson]);
 
-  type StationPopupState = { longitude: number; latitude: number; stationName: string; lines: string[]; status: string; adjacentStations?: Array<{ lineName: string; previous: string; next: string }>; };
   const [stationPopup, setStationPopup] = useState<StationPopupState | null>(null);
   const [popupIntroLoading, setPopupIntroLoading] = useState(false);
   const [popupIntroTitle, setPopupIntroTitle] = useState('');
@@ -833,7 +919,7 @@ export default function App() {
     () => (localStorage.getItem('metro-tts-trigger') as TriggerMode) || 'both'
   );
 
-  const [viewMode, setViewMode] = useState<'chat' | 'explore'>('chat');
+  const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [cultureTree, setCultureTree] = useState<CultureTreeNode[]>([]);
   const [cultureTreeLoading, setCultureTreeLoading] = useState(false);
   const [cultureTreeError, setCultureTreeError] = useState('');
@@ -1001,6 +1087,8 @@ export default function App() {
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [inputVal,      setInputVal]      = useState('');
   const [isTyping,      setIsTyping]      = useState(false);
+  const [undoStack, setUndoStack] = useState<ConversationSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<ConversationSnapshot[]>([]);
   const isSidebarVisible = viewMode === 'chat' && sidebarOpen;
 
   useEffect(() => {
@@ -1012,6 +1100,81 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem('metro-history-w', String(historyWidth)); }, [historyWidth]);
   useEffect(() => { localStorage.setItem('metro-sidebar-w', String(sidebarWidth)); }, [sidebarWidth]);
+
+  const captureConversationSnapshot = useCallback((): ConversationSnapshot => {
+    return {
+      sessions: cloneValue(sessions),
+      currentSessionId,
+      hasStarted,
+      apiRoutes: cloneValue(apiRoutes),
+      selectedRoute,
+      sidebarOpen,
+      mapExpanded,
+      viewMode,
+    };
+  }, [sessions, currentSessionId, hasStarted, apiRoutes, selectedRoute, sidebarOpen, mapExpanded, viewMode]);
+
+  const restoreConversationSnapshot = useCallback((snap: ConversationSnapshot) => {
+    setSessions(cloneValue(snap.sessions));
+    setCurrentSessionId(snap.currentSessionId);
+    setHasStarted(snap.hasStarted);
+    setApiRoutes(cloneValue(snap.apiRoutes));
+    setSelectedRoute(snap.selectedRoute);
+    setSidebarOpen(snap.sidebarOpen);
+    setMapExpanded(snap.mapExpanded);
+    setViewMode(snap.viewMode);
+  }, []);
+
+  const pushConversationSnapshot = useCallback(() => {
+    const MAX_STACK_SIZE = 40;
+    const snap = captureConversationSnapshot();
+    setUndoStack(prev => [...prev, snap].slice(-MAX_STACK_SIZE));
+    setRedoStack([]);
+  }, [captureConversationSnapshot]);
+
+  const handleConversationUndo = useCallback(() => {
+    let snapshotToRestore: ConversationSnapshot | null = null;
+    setUndoStack(prev => {
+      if (prev.length === 0) return prev;
+      snapshotToRestore = prev[prev.length - 1];
+      return prev.slice(0, -1);
+    });
+    if (!snapshotToRestore) return;
+    const current = captureConversationSnapshot();
+    setRedoStack(prev => [...prev, current].slice(-40));
+    restoreConversationSnapshot(snapshotToRestore);
+  }, [captureConversationSnapshot, restoreConversationSnapshot]);
+
+  const handleConversationRedo = useCallback(() => {
+    let snapshotToRestore: ConversationSnapshot | null = null;
+    setRedoStack(prev => {
+      if (prev.length === 0) return prev;
+      snapshotToRestore = prev[prev.length - 1];
+      return prev.slice(0, -1);
+    });
+    if (!snapshotToRestore) return;
+    const current = captureConversationSnapshot();
+    setUndoStack(prev => [...prev, current].slice(-40));
+    restoreConversationSnapshot(snapshotToRestore);
+  }, [captureConversationSnapshot, restoreConversationSnapshot]);
+
+  useEffect(() => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
+      const isUndoKey = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z';
+      if (!isUndoKey) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        handleConversationRedo();
+      } else {
+        handleConversationUndo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleConversationUndo, handleConversationRedo]);
 
   // settings
   const [settingsOpen,     setSettingsOpen]     = useState(false);
@@ -1195,8 +1358,37 @@ export default function App() {
     return lookup;
   }, [lineGeojson]);
 
+  const lineDirectionByLineName = useMemo(() => {
+    const lookup = new globalThis.Map<string, { front: string; terminal: string }>();
+    if (!lineGeojson) return lookup;
+    for (const f of lineGeojson.features) {
+      const rawName = String(f.properties?.line_name || '').trim();
+      if (!rawName || lookup.has(rawName)) continue;
+      const front = String(f.properties?.front_name || '').trim();
+      const terminal = String(f.properties?.terminal_name || '').trim();
+      if (!front || !terminal) continue;
+      lookup.set(rawName, { front, terminal });
+    }
+    return lookup;
+  }, [lineGeojson]);
+
+  const lineDirectionByBaseName = useMemo(() => {
+    const lookup = new globalThis.Map<string, { front: string; terminal: string }>();
+    if (!lineGeojson) return lookup;
+    for (const f of lineGeojson.features) {
+      const rawName = String(f.properties?.line_name || '').trim();
+      const baseName = normalizeLineBaseName(rawName);
+      if (!baseName || lookup.has(baseName)) continue;
+      const front = String(f.properties?.front_name || '').trim();
+      const terminal = String(f.properties?.terminal_name || '').trim();
+      if (!front || !terminal) continue;
+      lookup.set(baseName, { front, terminal });
+    }
+    return lookup;
+  }, [lineGeojson]);
+
   const stationLineNeighborLookup = useMemo(() => {
-    const lookup = new globalThis.Map<string, { previous: string; next: string }>();
+    const lookup = new globalThis.Map<string, Array<{ toward: string; next: string }>>();
     if (!pointGeojson) return lookup;
 
     const stationEntriesByLine = new globalThis.Map<string, Array<{ stationName: string; coord: [number, number] }>>();
@@ -1227,15 +1419,54 @@ export default function App() {
       if (indexed.length === 0) continue;
       indexed.sort((a, b) => a.index - b.index);
       const orderedNames = Array.from(new Set(indexed.map((item) => item.stationName)));
-      for (let idx = 0; idx < orderedNames.length; idx += 1) {
-        lookup.set(`${orderedNames[idx]}@@${lineRaw}`, {
-          previous: idx > 0 ? orderedNames[idx - 1] : '',
-          next: idx < orderedNames.length - 1 ? orderedNames[idx + 1] : '',
-        });
+      const direction = lineDirectionByLineName.get(lineRaw) || lineDirectionByBaseName.get(baseLineName);
+      const orientedNames = direction
+        ? orientStationsByDirection(orderedNames, direction.front, direction.terminal)
+        : orderedNames;
+      const frontName = direction?.front || orientedNames[0] || '';
+      const terminalName = direction?.terminal || orientedNames[orientedNames.length - 1] || '';
+      for (let idx = 0; idx < orientedNames.length; idx += 1) {
+        const nextTowardTerminal = idx < orientedNames.length - 1 ? orientedNames[idx + 1] : '';
+        const nextTowardFront = idx > 0 ? orientedNames[idx - 1] : '';
+        const directionalNext: Array<{ toward: string; next: string }> = [];
+        const seenToward = new Set<string>();
+
+        if (terminalName) {
+          const token = normalizeStationNameToken(terminalName);
+          if (!seenToward.has(token)) {
+            directionalNext.push({ toward: terminalName, next: nextTowardTerminal });
+            seenToward.add(token);
+          }
+        }
+        if (frontName) {
+          const token = normalizeStationNameToken(frontName);
+          if (!seenToward.has(token)) {
+            directionalNext.push({ toward: frontName, next: nextTowardFront });
+            seenToward.add(token);
+          }
+        }
+        if (directionalNext.length === 0) {
+          directionalNext.push({ toward: appLanguage === 'zh' ? '前方' : 'Forward', next: nextTowardTerminal });
+        }
+
+        const rawKey = `${orientedNames[idx]}@@${lineRaw}`;
+        lookup.set(rawKey, directionalNext);
+        if (baseLineName) {
+          const baseKey = `${orientedNames[idx]}@@${baseLineName}`;
+          const current = lookup.get(baseKey) || [];
+          lookup.set(baseKey, mergeDirectionalNextRecords(current, directionalNext));
+        }
       }
     }
     return lookup;
-  }, [pointGeojson, linePathsByLineName]);
+  }, [
+    appLanguage,
+    pointGeojson,
+    linePathsByLineName,
+    linePathsByBaseName,
+    lineDirectionByLineName,
+    lineDirectionByBaseName,
+  ]);
 
   const onMetroMapClick = useCallback((e: MapLayerMouseEvent) => {
     const selectedFeats = (e.features ?? []).filter(f => f.layer?.id === 'selected-route-stations-layer');
@@ -1253,13 +1484,19 @@ export default function App() {
     const coords = geom.coordinates;
     const lng = Number(coords[0]);
     const lat = Number(coords[1]);
-    const lineSet = new Set<string>();
+    const lineMap = new globalThis.Map<string, string>();
     const statusSet = new Set<string>();
     let stationName = '';
     for (const f of feats) {
       const p = f.properties;
       if (p && typeof p.station_name === 'string' && p.station_name) stationName = p.station_name;
-      if (p && typeof p.line_name === 'string' && p.line_name) lineSet.add(p.line_name);
+      if (p && typeof p.line_name === 'string' && p.line_name) {
+        const rawLine = String(p.line_name).trim();
+        if (rawLine) {
+          const baseLine = normalizeLineBaseName(rawLine) || rawLine;
+          if (!lineMap.has(baseLine)) lineMap.set(baseLine, baseLine);
+        }
+      }
       if (p && typeof p.status === 'string' && p.status) statusSet.add(p.status);
     }
     setPopupIntroLoading(false);
@@ -1268,16 +1505,20 @@ export default function App() {
     setPopupSimilarStations([]);
     setPopupSimilarLoading(false);
     setPopupSimilarError('');
-    const adjacentStations = [...lineSet]
+    const dedupedLines = [...lineMap.values()].sort();
+    const adjacentStations = dedupedLines
       .sort()
       .map((line) => {
         const lineRaw = String(line || '').trim();
-        const key = `${stationName}@@${lineRaw}`;
-        const neighbor = stationLineNeighborLookup.get(key);
+        const lineBase = normalizeLineBaseName(lineRaw);
+        const keyRaw = `${stationName}@@${lineRaw}`;
+        const keyBase = `${stationName}@@${lineBase}`;
+        const directionalNext = stationLineNeighborLookup.get(keyRaw)
+          || stationLineNeighborLookup.get(keyBase)
+          || [];
         return {
           lineName: line,
-          previous: neighbor?.previous || '',
-          next: neighbor?.next || '',
+          directionalNext,
         };
       });
 
@@ -1285,7 +1526,7 @@ export default function App() {
       longitude: lng,
       latitude: lat,
       stationName: stationName || (appLanguage === 'zh' ? '未知站点' : 'Unknown station'),
-      lines: [...lineSet].sort(),
+      lines: dedupedLines,
       status: [...statusSet].join(' / ') || '—',
       adjacentStations,
     });
@@ -1613,13 +1854,16 @@ export default function App() {
   }, [shownRoutes, selectedRoute]);
 
   const handleRouteCardClick = useCallback((idx: number) => {
+    if (idx !== selectedRoute) {
+      pushConversationSnapshot();
+    }
     setSelectedRoute(idx);
     // 即使点击同一栏位，也强制触发一次地图定位。
     setTimeout(() => {
       fitSelectedRouteOnMap(sidebarMapRef, idx);
       if (mapExpanded) fitSelectedRouteOnMap(fullscreenMapRef, idx);
     }, 0);
-  }, [fitSelectedRouteOnMap, mapExpanded]);
+  }, [fitSelectedRouteOnMap, mapExpanded, pushConversationSnapshot, selectedRoute]);
 
   const loadRoutes = useCallback(async (payload?: { query?: string; origin?: string; destination?: string }) => {
     setRouteLoading(true);
@@ -1722,6 +1966,8 @@ export default function App() {
   const sendMessageWithQuery = useCallback(async (queryOverride?: string, forceNewSession = false) => {
     const query = (typeof queryOverride === 'string' ? queryOverride : inputVal).trim();
     if (!query || isTyping) return;
+
+    pushConversationSnapshot();
 
     const userMsg: Message = { id: Date.now(), role: 'user', content: query };
     let sessionId = currentSessionId;
@@ -1875,7 +2121,7 @@ export default function App() {
       setStreamingText('');
       streamingTextRef.current = '';
     }
-  }, [inputVal, isTyping, currentSessionId, hasStarted, sessions, apiEndpoint, apiKey, selectedModel, ttsEnabled, triggerMode, tts, routeApiEndpoint, loadRoutes, requestBrowserLocation, appLanguage]);
+  }, [inputVal, isTyping, currentSessionId, hasStarted, sessions, apiEndpoint, apiKey, selectedModel, ttsEnabled, triggerMode, tts, routeApiEndpoint, loadRoutes, requestBrowserLocation, appLanguage, pushConversationSnapshot]);
 
   const handleSend = useCallback(async (queryOverride?: string | ReactMouseEvent<HTMLButtonElement>, forceNewSession = false) => {
     const query = typeof queryOverride === 'string' ? queryOverride : undefined;
@@ -1896,8 +2142,32 @@ export default function App() {
     void handleSend(prompt, true);
   }, [isTyping, appLanguage, closeStationPopup, handleSend]);
 
-  const handleNewChat = () => { tts.stop(); setHasStarted(false); setCurrentSessionId(null); setHistoryOpen(false); };
-  const handleSelectSession = (id: string) => { tts.stop(); setCurrentSessionId(id); setHasStarted(true); setHistoryOpen(false); };
+  const handleNewChat = () => {
+    pushConversationSnapshot();
+    tts.stop();
+    closeStationPopup();
+    setHasStarted(false);
+    setCurrentSessionId(null);
+    setHistoryOpen(false);
+    setSidebarOpen(false);
+    setMapExpanded(false);
+    setSelectedRoute(0);
+    setApiRoutes([]);
+    setRouteLoading(false);
+    setRouteError(null);
+    setInputVal('');
+    setStreamingText('');
+    streamingTextRef.current = '';
+  };
+  const handleSelectSession = (id: string) => {
+    if (id !== currentSessionId) {
+      pushConversationSnapshot();
+    }
+    tts.stop();
+    setCurrentSessionId(id);
+    setHasStarted(true);
+    setHistoryOpen(false);
+  };
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') handleSend(); };
 
   const handleFetchModels = async () => {
@@ -2133,21 +2403,21 @@ export default function App() {
                   </div>
                   {stationPopup.adjacentStations && stationPopup.adjacentStations.length > 0 && (
                     <div className="metro-station-popup__adjacent-block">
-                      <div className="metro-station-popup__adjacent-title">{t('上一站 / 下一站', 'Adjacent stations')}</div>
+                      <div className="metro-station-popup__adjacent-title">{t('相邻站点信息', 'Adjacent station info')}</div>
                       <div className="metro-station-popup__adjacent-list">
-                        {stationPopup.adjacentStations.map(({ lineName, previous, next }) => (
+                        {stationPopup.adjacentStations.map(({ lineName, directionalNext }) => (
                           <div className="metro-station-popup__adjacent-line" key={lineName}>
                             <div className="metro-station-popup__adjacent-line-name">
                               {displayLineName(lineName, appLanguage)}
                             </div>
-                            <div className="metro-station-popup__adjacent-item">
-                              <span className="metro-station-popup__adjacent-item-label">{t('上一站', 'Prev')}</span>
-                              <span>{previous || '—'}</span>
-                            </div>
-                            <div className="metro-station-popup__adjacent-item">
-                              <span className="metro-station-popup__adjacent-item-label">{t('下一站', 'Next')}</span>
-                              <span>{next || '—'}</span>
-                            </div>
+                            {directionalNext.map(({ toward, next }) => (
+                              <div className="metro-station-popup__adjacent-item" key={`${lineName}-${toward}`}>
+                                <span className="metro-station-popup__adjacent-item-label">
+                                  {t('往', 'Towards')} {displayStationName(toward, appLanguage)}
+                                </span>
+                                <span>{next ? displayStationName(next, appLanguage) : '—'}</span>
+                              </div>
+                            ))}
                           </div>
                         ))}
                       </div>
@@ -2288,6 +2558,20 @@ export default function App() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
             <path d="M12 5v14M5 12h14" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
+        </button>
+        <button
+          id="top-undo-btn"
+          onClick={handleConversationUndo}
+          disabled={undoStack.length === 0}
+          title={t('撤回（Cmd/Ctrl+Z）', 'Undo (Cmd/Ctrl+Z)')}>
+          <img className="top-action-icon" src={undoIcon} alt="" aria-hidden />
+        </button>
+        <button
+          id="top-redo-btn"
+          onClick={handleConversationRedo}
+          disabled={redoStack.length === 0}
+          title={t('恢复（Cmd/Ctrl+Shift+Z）', 'Redo (Cmd/Ctrl+Shift+Z)')}>
+          <img className="top-action-icon" src={redoIcon} alt="" aria-hidden />
         </button>
         <div className="logo-area">
           <span className="logo-text">{t('京轨 —— 在地铁上读懂北京', 'JingRail.AI: Understand Beijing on the Metro')}</span>
