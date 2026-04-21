@@ -12,42 +12,88 @@ function normalizeName(name) {
   return String(name || "").trim();
 }
 
+function buildStationNameCandidates(raw) {
+  const src = normalizeName(raw);
+  if (!src) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (v) => {
+    const t = normalizeName(v);
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+
+  push(src);
+  push(src.replace(/\s+/g, " "));
+  push(src.replace(/[’']/g, "'"));
+  push(src.replace(/\b(?:metro|subway)\s+station\b/gi, ""));
+  push(src.replace(/\bstation\b/gi, ""));
+  push(src.replace(/\s+/g, " "));
+
+  if (src.endsWith("站") && src.length > 1) push(src.slice(0, -1));
+  if (src.startsWith("北京") && src.length > 2) push(src.slice(2));
+
+  return out;
+}
+
+function compactKey(input) {
+  return String(input || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[\s_-]+/g, "")
+    .trim();
+}
+
 function loadDisplayMaps() {
   if (displayMapsCache) return displayMapsCache;
-  displayMapsCache = { exact: {}, lower: {}, aliases: {} };
+  displayMapsCache = { exact: {}, lower: {}, aliases: {}, compact: {} };
   try {
     const d = JSON.parse(fs.readFileSync(DISPLAY_TO_ZH_PATH, "utf8"));
     displayMapsCache.exact = d.exact || {};
     displayMapsCache.lower = d.lower || {};
+    for (const [k, v] of Object.entries(displayMapsCache.exact)) {
+      const ck = compactKey(k);
+      if (ck && !displayMapsCache.compact[ck]) displayMapsCache.compact[ck] = v;
+    }
+    for (const [k, v] of Object.entries(displayMapsCache.lower)) {
+      const ck = compactKey(k);
+      if (ck && !displayMapsCache.compact[ck]) displayMapsCache.compact[ck] = v;
+    }
   } catch {
     /**/
   }
   try {
     const a = JSON.parse(fs.readFileSync(ENGLISH_ALIASES_PATH, "utf8"));
     displayMapsCache.aliases = a || {};
+    for (const [k, v] of Object.entries(displayMapsCache.aliases)) {
+      const ck = compactKey(k);
+      if (ck && !displayMapsCache.compact[ck]) displayMapsCache.compact[ck] = v;
+    }
   } catch {
     /**/
   }
+  // 常见英文短拼兜底
+  if (!displayMapsCache.compact.shahe) displayMapsCache.compact.shahe = "沙河";
   return displayMapsCache;
 }
 
 /** 将用户/模型输入的站名（含英文、拼音展示名）解析为图中存在的中文 canonical 名 */
 function resolveToCanonicalChineseStation(graph, raw) {
-  const n = normalizeName(raw);
-  if (!n) return "";
-  if (graph.stationNameToId[n]) return n;
-  if (n.endsWith("站") && n.length > 1) {
-    const w = n.slice(0, -1);
-    if (graph.stationNameToId[w]) return w;
-  }
   const maps = loadDisplayMaps();
-  const keyLower = n.toLowerCase().replace(/\s+/g, " ").trim();
-  const fromAlias = maps.aliases[keyLower];
-  if (fromAlias && graph.stationNameToId[fromAlias]) return fromAlias;
-  const fromExact = maps.exact[n];
-  if (fromExact && graph.stationNameToId[fromExact]) return fromExact;
-  const fromLower = maps.lower[keyLower];
-  if (fromLower && graph.stationNameToId[fromLower]) return fromLower;
+  const candidates = buildStationNameCandidates(raw);
+  for (const n of candidates) {
+    if (graph.stationNameToId[n]) return n;
+    const keyLower = n.toLowerCase().replace(/\s+/g, " ").trim();
+    const fromAlias = maps.aliases[keyLower];
+    if (fromAlias && graph.stationNameToId[fromAlias]) return fromAlias;
+    const fromExact = maps.exact[n];
+    if (fromExact && graph.stationNameToId[fromExact]) return fromExact;
+    const fromLower = maps.lower[keyLower];
+    if (fromLower && graph.stationNameToId[fromLower]) return fromLower;
+    const fromCompact = maps.compact[compactKey(n)];
+    if (fromCompact && graph.stationNameToId[fromCompact]) return fromCompact;
+  }
   return "";
 }
 
@@ -60,6 +106,13 @@ function resolveToCanonicalChineseStation(graph, raw) {
 function splitRouteEndpoints(raw) {
   const text = normalizeName(raw);
   if (!text) return { origin: "", destination: "" };
+  const arrowMatch = text.match(/^(.+?)\s*(?:->|→|到|至|-)\s*(.+)$/);
+  if (arrowMatch) {
+    return {
+      origin: normalizeName(arrowMatch[1]),
+      destination: normalizeName(arrowMatch[2])
+    };
+  }
   if (text.includes("|")) {
     const i = text.indexOf("|");
     const origin = normalizeName(text.slice(0, i));
@@ -92,6 +145,14 @@ function parseOriginDestinationFromQuery(queryText) {
         origin: normalizeName(match[1]),
         destination: normalizeName(match[2])
       };
+    }
+  }
+
+  // 英文自然语言整句（无明确分隔符）不要强拆成“前N词/最后1词”，避免把普通问句当站名。
+  if (!/[|→]|->|到|至/.test(text)) {
+    const parts = text.split(/\s+/).filter(Boolean);
+    if (parts.length > 3 && /[A-Za-z]/.test(text)) {
+      return { origin: "", destination: "" };
     }
   }
 
@@ -264,8 +325,58 @@ function buildLineSegments(graph, nodePath, lineSequence) {
 
 const TRANSFER_PENALTY_MINUTES = 5; // 每换乘增加5分钟惩罚
 
+class MinPriorityQueue {
+  constructor() {
+    this.heap = [];
+  }
+  // 返回优先队列的长度
+  size() {
+    return this.heap.length;
+  }
+  // 将元素添加到优先队列 (使用最小堆实现)
+  push(node, priority) {
+    this.heap.push({ node, priority });
+    this.bubbleUp(this.heap.length - 1);
+  }
+  // 从优先队列中弹出元素
+  pop() {
+    if (this.heap.length === 0) return null;
+    const top = this.heap[0];
+    const last = this.heap.pop();
+    if (this.heap.length > 0 && last) {
+      this.heap[0] = last;
+      this.bubbleDown(0);
+    }
+    return top;
+  }
+
+  bubbleUp(index) {
+    let i = index;
+    while (i > 0) {
+      const parent = Math.floor((i - 1) / 2);
+      if (this.heap[parent].priority <= this.heap[i].priority) break;
+      [this.heap[parent], this.heap[i]] = [this.heap[i], this.heap[parent]];
+      i = parent;
+    }
+  }
+
+  bubbleDown(index) {
+    let i = index;
+    const n = this.heap.length;
+    while (true) {
+      const left = i * 2 + 1;
+      const right = i * 2 + 2;
+      let smallest = i;
+      if (left < n && this.heap[left].priority < this.heap[smallest].priority) smallest = left;
+      if (right < n && this.heap[right].priority < this.heap[smallest].priority) smallest = right;
+      if (smallest === i) break;
+      [this.heap[i], this.heap[smallest]] = [this.heap[smallest], this.heap[i]];
+      i = smallest;
+    }
+  }
+}
+
 function aStarRoute(graph, originId, destinationId) {
-  const open = new Set([originId]);
   const cameFrom = {};
   const gScore = { [originId]: 0 };
   const fScore = {
@@ -277,23 +388,20 @@ function aStarRoute(graph, originId, destinationId) {
       0
     )
   };
+  // 换乘次数
   const transferCount = { [originId]: 0 };
+  // 上一条线路
   const lastLine = { [originId]: "" };
+  // 优先队列
+  const openQueue = new MinPriorityQueue();
+  openQueue.push(originId, fScore[originId]);
 
-  while (open.size > 0) {
-    let current = null;
-    let currentF = Infinity;
-    for (const node of open) {
-      const score = fScore[node] ?? Infinity;
-      if (score < currentF) {
-        currentF = score;
-        current = node;
-      }
-    }
-
-    if (!current) break;
+  while (openQueue.size() > 0) {
+    const top = openQueue.pop();
+    if (!top) break;
+    const { node: current, priority } = top;
+    if (priority > (fScore[current] ?? Infinity)) continue;
     if (current === destinationId) return reconstructPath(cameFrom, current);
-    open.delete(current);
 
     const neighbors = graph.adjacency[current] || [];
     for (const edge of neighbors) {
@@ -314,7 +422,7 @@ function aStarRoute(graph, originId, destinationId) {
             ),
             0
           );
-        open.add(edge.to);
+        openQueue.push(edge.to, fScore[edge.to]);
       }
     }
   }
@@ -459,8 +567,8 @@ function queryRoute(origin, destination, options = {}) {
 
   if (!originId || !destinationId) {
     return {
-      origin: safeOrigin,
-      destination: safeDestination,
+      origin: originResolved,
+      destination: destinationResolved,
       generatedAt: new Date().toISOString(),
       error: "station not found",
       routes: []

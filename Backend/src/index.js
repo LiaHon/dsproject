@@ -396,16 +396,18 @@ const server = http.createServer((req, res) => {
       ].join("\n");
 
       const promptEn = [
-        "你是路线查询提取器。当前用户界面为【英文】：标签内可用英文常用名或中文官方名，系统会映射到路网。",
-        "给你【用户输入】和【助手回复】，请提取所有需要查询的起点终点对。",
-        "规则：",
-        "1. 若用户输入或上下文明确当前位置，以此为起点；否则不随意假设。",
-        "2. 若助手推荐可乘地铁前往的地点，提取为终点；纯自驾远郊勿硬配对。",
-        "3. 只输出多个 <query>...</query>，不要其它文字。",
-        "4. 每标签内为起点与终点两段：优先 <query>起点|终点</query>（英文多词站名必须用 |），例如 <query>Shahe Higher Education Park|Xitucheng</query>；中文无空格也可 <query>天安门东 王府井</query>。",
-        "5. 英文多词切勿拆成两站；不确定时用中文官方名 + |。",
-        "6. 无可提取路线时返回空字符串。",
-        "示例：<query>天安门东|王府井</query><query>天安门东|前门</query>"
+        "You are a route query extractor. The current user interface is 【English】: use official English station names or Chinese official names inside tags; the system will map them to the road network.",
+        "Given 【User Input】 and 【Assistant Response】, extract all origin-destination pairs that need to be queried.",
+        "Rules:",
+        "1. If current location is explicitly stated in user input or context, use it as origin; otherwise do not assume.",
+        "2. If the assistant recommends places reachable by metro, extract them as destinations. Do not pair for purely self-driving suburban trips.",
+        "3. Output only multiple <query>...</query> tags, no other text.",
+        "4. Use only official English station names as displayed in the metro system. Separate origin and destination with a pipe |. Example: <query>Shahe Higher Education Park|Hui Long Guan</query>.",
+        "5. Never split multi-word English station names. If unsure about the exact official English name, use the Chinese official name + pipe.",
+        "6. Return an empty string if no routable pairs can be extracted.",
+        "Examples:",
+        "<query>Shahe Higher Education Park|Hui Long Guan</query>",
+        "<query>Tian'anmen East|Wangfujing</query>"
       ].join("\n");
 
       const prompt = uiLang === "en" ? promptEn : promptZh;
@@ -432,8 +434,11 @@ const server = http.createServer((req, res) => {
 
         const pairs = extractQueryPairs(content);
         const routeItems = [];
+        const skippedQueries = [];
         for (const pair of pairs) {
           const routeResult = queryRoute(pair.origin, pair.destination, { algorithm: data.algorithm || "astar" });
+          const displayOrigin = routeResult.origin || pair.origin;
+          const displayDestination = routeResult.destination || pair.destination;
           console.log(
             `[route-batch] query="${pair.origin} ${pair.destination}" resolved_origin=${routeResult.origin || ""} resolved_destination=${
               routeResult.destination || ""
@@ -441,23 +446,18 @@ const server = http.createServer((req, res) => {
           );
           const firstRoute = Array.isArray(routeResult.routes) ? routeResult.routes[0] : null;
           if (!firstRoute) {
-            routeItems.push({
-              routeId: `route_error_${pair.origin}_${pair.destination}`,
-              title: `${pair.origin} -> ${pair.destination}`,
-              origin: pair.origin,
-              destination: pair.destination,
-              duration: 0,
-              color1: "#ef4444",
-              label1: `查询失败：${routeResult.error || "route not found"}`,
-              error: routeResult.error || "route not found",
-              stations: []
+            skippedQueries.push({
+              origin: displayOrigin,
+              destination: displayDestination,
+              reason: routeResult.error || "route not found"
             });
+            continue;
           } else {
             routeItems.push({
               ...firstRoute,
-              title: `${pair.origin} -> ${pair.destination}`,
-              origin: pair.origin,
-              destination: pair.destination,
+              title: `${displayOrigin} -> ${displayDestination}`,
+              origin: displayOrigin,
+              destination: displayDestination,
               error: routeResult.error || ""
             });
           }
@@ -466,6 +466,7 @@ const server = http.createServer((req, res) => {
         return sendJson(res, 200, {
           requestId: buildRequestId(),
           queries: pairs,
+          skippedQueries,
           routes: routeItems
         });
       } catch (err) {
