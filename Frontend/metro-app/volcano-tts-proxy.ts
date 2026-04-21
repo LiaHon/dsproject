@@ -25,10 +25,12 @@ import 'dotenv/config';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'url';
+import { networkInterfaces } from 'os';
 
 // ── 配置 ─────────────────────────────────────────────────────────────────────
 const DEFAULT_CLUSTER = process.env.VITE_VOLCANO_CLUSTER || process.env.VOLCANO_CLUSTER || 'volcano_tts';
 const PORT            = parseInt(process.env.PROXY_PORT || '8765', 10);
+const HOST            = process.env.PROXY_HOST || '0.0.0.0';
 const ALLOWED_ORIGIN  = process.env.ALLOWED_ORIGIN || '';
 
 // 火山 TTS WebSocket 端点（国内版）
@@ -206,10 +208,22 @@ wss.on('connection', (clientWs, req) => {
   volcanoWs.on('error', (e) => { console.error('[Proxy] 火山连接错误:', e); cleanup('volcano')(); });
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
+  const interfaces = networkInterfaces();
+  const lanAddresses: string[] = [];
+  for (const items of Object.values(interfaces)) {
+    for (const item of items || []) {
+      if (item.family === 'IPv4' && !item.internal) {
+        lanAddresses.push(item.address);
+      }
+    }
+  }
   console.log(`[Proxy] ✅ 火山 TTS WebSocket 代理已启动`);
-  console.log(`[Proxy]    监听端口  : ${PORT}`);
+  console.log(`[Proxy]    监听地址  : ${HOST}:${PORT}`);
   console.log(`[Proxy]    目标服务  : ${VOLCANO_WS_URL}`);
   console.log(`[Proxy]    健康检查  : http://localhost:${PORT}/health`);
+  if (lanAddresses.length > 0) {
+    console.log(`[Proxy]    局域网地址: ${lanAddresses.map((ip) => `ws://${ip}:${PORT}`).join(', ')}`);
+  }
   console.log(`[Proxy]    状态      : 等待前端携带 ?appid=xxx&token=yyy 接入...`);
 });

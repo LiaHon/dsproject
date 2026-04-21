@@ -19,6 +19,7 @@ import {
   displayStationName,
   resolveLineKeyForPalette,
 } from './metroNameI18n';
+import cultureExploreBundle from './data/cultureExploreEn.json';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface Station {
@@ -131,6 +132,43 @@ interface ConversationSnapshot {
   sidebarOpen: boolean;
   mapExpanded: boolean;
   viewMode: ViewMode;
+}
+
+type CultureExploreBundle = {
+  version: number;
+  labels: Record<string, string>;
+  reasonLabels: Record<string, string>;
+  storyEnByKey: Record<string, string>;
+};
+
+const CULTURE_EXPLORE = cultureExploreBundle as CultureExploreBundle;
+
+function translateCultureToken(token: string, lang: 'zh' | 'en'): string {
+  const raw = String(token || '').trim();
+  if (!raw || lang === 'zh') return raw;
+  return CULTURE_EXPLORE.labels[raw] || raw;
+}
+
+function translateCultureReason(reason: string, lang: 'zh' | 'en'): string {
+  const raw = String(reason || '').trim();
+  if (!raw || lang === 'zh') return raw;
+  const m = raw.match(/^(同属主题|共享标签|同类属性)：(.+)$/);
+  if (!m) return translateCultureToken(raw, lang);
+  const labelZh = m[1];
+  const labelEn = CULTURE_EXPLORE.reasonLabels[labelZh] || labelZh;
+  const values = m[2]
+    .split(/[、>]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => translateCultureToken(item, lang));
+  return `${labelEn}: ${values.join(', ')}`;
+}
+
+function translateCultureSummary(stationName: string, summary: string, lang: 'zh' | 'en'): string {
+  const raw = String(summary || '').trim();
+  if (!raw || lang === 'zh') return raw;
+  const hit = CULTURE_EXPLORE.storyEnByKey[`${stationName}\t${raw}`];
+  return hit || raw;
 }
 
 function cloneValue<T>(value: T): T {
@@ -341,7 +379,16 @@ const SYSTEM_PROMPT_EN = `You are Beijing Metro AI, a cultural guide and metro-t
 - Friendly, concise, like a tour guide; 2–4 high-value points, not long essays.
 `;
 
-const DEFAULT_BACKEND_BASE = 'http://localhost:3000';
+const DEFAULT_BACKEND_BASE = (import.meta.env.VITE_BACKEND_BASE || '').trim();
+
+function getDefaultTtsProxyWsUrl(): string {
+  const fromEnv = (import.meta.env.VITE_TTS_PROXY_WS || '').trim();
+  if (fromEnv) return fromEnv;
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `ws://${window.location.hostname}:8765`;
+  }
+  return 'ws://localhost:8765';
+}
 
 function getBackendBaseUrl(routeApiEndpoint: string): string {
   const value = (routeApiEndpoint || '').trim();
@@ -355,7 +402,7 @@ function getBackendBaseUrl(routeApiEndpoint: string): string {
 function getRouteApiUrl(routeApiEndpoint: string): string {
   const value = (routeApiEndpoint || '').trim();
   if (value) return value;
-  return `${DEFAULT_BACKEND_BASE}/api/route`;
+  return DEFAULT_BACKEND_BASE ? `${DEFAULT_BACKEND_BASE}/api/route` : '/api/route';
 }
 
 type ParsedRouteLabelItem =
@@ -820,7 +867,7 @@ export default function App() {
   const [ttsEnabled,    setTtsEnabled]    = useState(() => localStorage.getItem('metro-tts') !== 'false');
   const [ttsAppId,      setTtsAppId]      = useState(() => localStorage.getItem('metro-tts-appid') || '');
   const [ttsToken,      setTtsToken]      = useState(() => localStorage.getItem('metro-tts-token') || '');
-  const [ttsWsUrl,      setTtsWsUrl]      = useState(() => localStorage.getItem('metro-tts-ws')    || 'ws://localhost:8765');
+  const [ttsWsUrl,      setTtsWsUrl]      = useState(() => localStorage.getItem('metro-tts-ws')    || getDefaultTtsProxyWsUrl());
   const [ttsVoice,      setTtsVoice]      = useState(() => localStorage.getItem('metro-tts-voice') || 'BV700_streaming');
   const [ttsVoiceZh,    setTtsVoiceZh]    = useState(() => localStorage.getItem('metro-tts-voice-zh') || '');
   const [ttsVoiceJa,    setTtsVoiceJa]    = useState(() => localStorage.getItem('metro-tts-voice-ja') || '');
@@ -954,7 +1001,7 @@ export default function App() {
   useEffect(() => {
     const old = localStorage.getItem('metro-tts-ws') || '';
     if (old.includes('openspeech.bytedance.com')) {
-      setTtsWsUrl('ws://localhost:8765');
+      setTtsWsUrl(getDefaultTtsProxyWsUrl());
     }
   }, []);
   useEffect(() => { localStorage.setItem('metro-tts-speed',    String(ttsSpeed)); },   [ttsSpeed]);
@@ -1077,11 +1124,11 @@ export default function App() {
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
   const [historyWidth,  setHistoryWidth]  = useState(() => {
     const v = Number(localStorage.getItem('metro-history-w'));
-    return Number.isFinite(v) ? clamp(v, 180, 420) : 240;
+    return Number.isFinite(v) ? clamp(v, 160, 320) : 220;
   });
   const [sidebarWidth,  setSidebarWidth]  = useState(() => {
     const v = Number(localStorage.getItem('metro-sidebar-w'));
-    return Number.isFinite(v) ? clamp(v, 280, 560) : 360;
+    return Number.isFinite(v) ? clamp(v, 240, 420) : 320;
   });
   const [mapExpanded,   setMapExpanded]   = useState(false);
   const [selectedRoute, setSelectedRoute] = useState(0);
@@ -1585,6 +1632,89 @@ export default function App() {
     }
     return items;
   }, [pointGeojson]);
+
+  const buildStationPopupStateByName = useCallback((stationName: string, preferredLineName?: string): StationPopupState | null => {
+    const targetStation = String(stationName || '').trim();
+    if (!targetStation || !pointGeojson) return null;
+
+    const lineMap = new globalThis.Map<string, string>();
+    const statusSet = new Set<string>();
+    const coordCandidates: Array<[number, number]> = [];
+    for (const f of pointGeojson.features) {
+      if (!f.geometry || f.geometry.type !== 'Point') continue;
+      const name = String(f.properties?.station_name || '').trim();
+      if (name !== targetStation) continue;
+      const coords = f.geometry.coordinates;
+      const lng = Number(coords[0]);
+      const lat = Number(coords[1]);
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        coordCandidates.push([lng, lat]);
+      }
+      const rawLine = String(f.properties?.line_name || '').trim();
+      if (rawLine) {
+        const baseLine = normalizeLineBaseName(rawLine) || rawLine;
+        if (!lineMap.has(baseLine)) lineMap.set(baseLine, baseLine);
+      }
+      const status = String(f.properties?.status || '').trim();
+      if (status) statusSet.add(status);
+    }
+    if (coordCandidates.length === 0) return null;
+
+    const preferredBase = normalizeLineBaseName(preferredLineName || '');
+    const preferredCoord = preferredBase ? stationLineCoordLookup.get(`${targetStation}@@${preferredBase}`) : null;
+    const [lng, lat] = preferredCoord || coordCandidates[0];
+    const dedupedLines = [...lineMap.values()].sort();
+    const adjacentStations = dedupedLines.map((line) => {
+      const lineRaw = String(line || '').trim();
+      const lineBase = normalizeLineBaseName(lineRaw);
+      const keyRaw = `${targetStation}@@${lineRaw}`;
+      const keyBase = `${targetStation}@@${lineBase}`;
+      const directionalNext = stationLineNeighborLookup.get(keyRaw)
+        || stationLineNeighborLookup.get(keyBase)
+        || [];
+      return {
+        lineName: line,
+        directionalNext,
+      };
+    });
+
+    return {
+      longitude: lng,
+      latitude: lat,
+      stationName: targetStation,
+      lines: dedupedLines,
+      status: [...statusSet].join(' / ') || '—',
+      adjacentStations,
+    };
+  }, [pointGeojson, stationLineCoordLookup, stationLineNeighborLookup]);
+
+  const jumpToAdjacentStation = useCallback((nextStationName: string, lineName?: string) => {
+    const popupState = buildStationPopupStateByName(nextStationName, lineName);
+    if (!popupState) return;
+
+    metroIntroAbortRef.current?.abort();
+    metroIntroAbortRef.current = null;
+    tts.stop();
+    setPopupIntroLoading(false);
+    setPopupIntroTitle('');
+    setPopupIntroText('');
+    setPopupSimilarStations([]);
+    setPopupSimilarLoading(false);
+    setPopupSimilarError('');
+
+    const mapRefs = [sidebarMapRef.current, fullscreenMapRef.current].filter(Boolean);
+    for (const ref of mapRefs) {
+      const map = ref?.getMap?.();
+      if (!map) continue;
+      map.easeTo({
+        center: [popupState.longitude, popupState.latitude],
+        duration: 650,
+        essential: true,
+      });
+    }
+
+    setStationPopup(popupState);
+  }, [buildStationPopupStateByName, tts]);
 
   const latestUserLocationGeojson = useMemo((): FeatureCollection<Geometry, GeoJsonProperties> | null => {
     if (!latestUserLocation) return null;
@@ -2275,6 +2405,15 @@ export default function App() {
             {selectedRouteLineGeojson && (
               <Source id="selected-route-line" type="geojson" data={selectedRouteLineGeojson}>
                 <Layer
+                  id="selected-route-line-layer"
+                  type="line"
+                  paint={{
+                    'line-color': ['get', 'routeColor'],
+                    'line-width': ['interpolate', ['linear'], ['zoom'], 8, 4, 12, 6, 15, 9],
+                    'line-opacity': 0.95,
+                  }}
+                />
+                <Layer
                   id="selected-route-arrow-layer"
                   type="symbol"
                   layout={{
@@ -2299,6 +2438,15 @@ export default function App() {
             )}
             {selectedRouteTransferGeojson && (
               <Source id="selected-route-transfer" type="geojson" data={selectedRouteTransferGeojson}>
+                <Layer
+                  id="selected-route-transfer-line-layer"
+                  type="line"
+                  paint={{
+                    'line-color': ['get', 'lineColor'],
+                    'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3.5, 12, 5.5, 15, 8],
+                    'line-opacity': 0.92,
+                  }}
+                />
                 <Layer
                   id="selected-route-transfer-layer"
                   type="symbol"
@@ -2415,7 +2563,17 @@ export default function App() {
                                 <span className="metro-station-popup__adjacent-item-label">
                                   {t('往', 'Towards')} {displayStationName(toward, appLanguage)}
                                 </span>
-                                <span>{next ? displayStationName(next, appLanguage) : '—'}</span>
+                                {next
+                                  ? (
+                                    <button
+                                      type="button"
+                                      className="metro-station-popup__adjacent-link"
+                                      onClick={() => jumpToAdjacentStation(next, lineName)}
+                                      title={t(`跳转到 ${displayStationName(next, appLanguage)}`, `Jump to ${displayStationName(next, 'en')}`)}>
+                                      {displayStationName(next, appLanguage)}
+                                    </button>
+                                    )
+                                  : <span>—</span>}
                               </div>
                             ))}
                           </div>
@@ -2547,6 +2705,8 @@ export default function App() {
         {
           '--history-w': `${historyWidth}px`,
           '--sidebar-w': `${sidebarWidth}px`,
+          '--history-push': `${Math.round(historyWidth * 0.42)}px`,
+          '--sidebar-push': `${Math.round(sidebarWidth * 0.42)}px`,
         } as CSSProperties
       }>
       {/* Topbar */}
@@ -2641,7 +2801,7 @@ export default function App() {
                 <h2>{t('文化探索', 'Culture explorer')}</h2>
                 <div className="explore-header-actions">
                   {culturePath.length > 0 && (
-                    <span className="explore-breadcrumb">{culturePath.join(' > ')}</span>
+                    <span className="explore-breadcrumb">{culturePath.map((p) => translateCultureToken(p, appLanguage)).join(' > ')}</span>
                   )}
                   <button
                     className="btn-secondary"
@@ -2680,7 +2840,7 @@ export default function App() {
                                   setExploreSimilarStations([]);
                                   setExploreSimilarError('');
                                 }}>
-                                <span>{node.name}</span>
+                                <span>{translateCultureToken(node.name, appLanguage)}</span>
                                 <span className="explore-chip-count">{node.count}</span>
                               </button>
                             );
@@ -2714,10 +2874,10 @@ export default function App() {
                             key={station.station_name}
                             className={`explore-station-card ${selectedCultureStation === station.station_name ? 'active' : ''}`}>
                             <div className="explore-station-title">{displayStationName(station.station_name, appLanguage)}</div>
-                            <div className="explore-station-summary">{station.story_summary || t('暂无简介', 'No summary')}</div>
+                            <div className="explore-station-summary">{translateCultureSummary(station.station_name, station.story_summary, appLanguage) || t('暂无简介', 'No summary')}</div>
                             <div className="explore-chip-wrap">
                               {station.culture_tags.slice(0, 4).map((tag) => (
-                                <span key={`${station.station_name}-${tag}`} className="explore-mini-chip">{tag}</span>
+                                <span key={`${station.station_name}-${tag}`} className="explore-mini-chip">{translateCultureToken(tag, appLanguage)}</span>
                               ))}
                             </div>
                             <div className="explore-station-actions">
@@ -2764,7 +2924,9 @@ export default function App() {
                               <span>{displayStationName(item.station_name, appLanguage)}</span>
                               <strong>{Math.round(item.score * 100)}%</strong>
                             </div>
-                            <div className="explore-similar-item__reason">{item.reasons.join('；') || t('标签相近', 'Similar labels')}</div>
+                            <div className="explore-similar-item__reason">
+                              {item.reasons.map((r) => translateCultureReason(r, appLanguage)).join('; ') || t('标签相近', 'Similar labels')}
+                            </div>
                             <div className="explore-similar-item__actions">
                               <button
                                 className="btn-secondary"
@@ -3200,9 +3362,9 @@ export default function App() {
                     <div className="form-group">
                       <label>{t('路线规划 API 地址', 'Route API Endpoint')}</label>
                       <input type="text" value={routeApiEndpoint} onChange={e => setRouteApiEndpoint(e.target.value)}
-                        placeholder="http://localhost:3000/api/route" />
+                        placeholder="/api/route（或 http://你的电脑IP:3000/api/route）" />
                       <div className="settings-hint">
-                        {t('用于右侧路线列表的数据来源（POST JSON）。留空则使用内置示例数据。', 'Data source for the right route list (POST JSON). Leave empty to use built-in demo data.')}
+                        {t('用于右侧路线列表的数据来源（POST JSON）。留空默认走 /api/route（推荐配合 Vite 代理）。', 'Data source for the right route list (POST JSON). Leave empty to use /api/route (recommended with Vite proxy).')}
                       </div>
                     </div>
                     <div className="form-group">

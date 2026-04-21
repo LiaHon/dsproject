@@ -15,6 +15,7 @@
 npm install
 
 # 启动开发服务器
+## PC端
 ### 前端
 cd dsproject-main\Frontend\metro-app
 npm run dev
@@ -24,6 +25,10 @@ npx tsx volcano-tts-proxy.ts
 ### 后端
 cd dsproject-main\Backend
 npm run dev
+## 手机移动端
+如果是要在电脑上部署，用手机访问网页：前后端开启时应该采用**npm run dev -- --host**来开启，电脑和手机连在同一个Wifi或者流量上。
+同时，手机应该在设置里面修改语音和后端的IP，后端IP示例：http://xx.xxx.xxx.xx:3000/api/route；语音IP示例：ws://xx.xxx.xxx.xx:8765。
+
 ```
 
 ## 语音合成（TTS）

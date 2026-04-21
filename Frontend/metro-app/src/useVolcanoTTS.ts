@@ -403,12 +403,11 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
     audioQueueRef.current.push({ index: slotIndex, chunks: [], done: false });
     
     const urlObj = new URL(opts.wsUrl);
-    if (opts.appId && opts.token) {
-      if (urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1') {
-         // Proxy 模式：直接将 appid 和 token 作为 URL 参数供 Node Server 在 Header 注册 Bytedance WSS 
-         urlObj.searchParams.set('appid', opts.appId);
-         urlObj.searchParams.set('token', opts.token);
-      }
+    const isVolcanoDirectHost = /(^|\.)openspeech\.bytedance\.com$/i.test(urlObj.hostname);
+    if (opts.appId && opts.token && !isVolcanoDirectHost) {
+      // Proxy 模式：无论是 localhost 还是局域网 IP，都通过 query 传给本地代理。
+      urlObj.searchParams.set('appid', opts.appId);
+      urlObj.searchParams.set('token', opts.token);
     }
     
     const normalizedText = cleanText.replace(/^\s*(中文|日本語|日语|英语|English)\s*[:：]\s*/i, '').trim();
@@ -545,7 +544,7 @@ export function useVolcanoTTS(opts: VolcanoTTSOptions) {
       ws.onerror = (e) => {
         addLog(`[TTS] WS Error on slot ${slotIndex}`);
         console.warn('[TTS] WS error on slot', slotIndex, e);
-        if (urlObj.hostname !== 'localhost' && urlObj.hostname !== '127.0.0.1') {
+        if (isVolcanoDirectHost) {
           addLog(`提示：由于浏览器不支持传递 Authorization Header，通常纯前端直连 wss://openspeech.bytedance.com 会报 403/401 握手失败。如果你没有在后台针对该 AppID 开启 URL Param Auth，请使用 ws://localhost:8765 本地代理。`);
         }
         const slot = audioQueueRef.current.find(s => s.index === slotIndex);
